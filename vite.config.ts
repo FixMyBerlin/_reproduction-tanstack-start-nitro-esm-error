@@ -10,6 +10,7 @@ export default defineConfig({
       // Force tslib to be bundled (not auto-externalized) so the __toESM bug manifests.
       // Without this, Nitro's dep-tracing externalizes tslib and the bug is masked.
       noExternals: true,
+      traceDeps: ['@aws-crypto/crc32'],
     }),
     tanstackStart({}),
     viteReact(),
