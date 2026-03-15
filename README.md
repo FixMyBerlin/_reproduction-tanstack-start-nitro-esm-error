@@ -55,11 +55,12 @@ explicitly providing `exports.default`.
 The most common trigger is **`tslib`**, which is a UMD/CJS module that sets
 `Object.defineProperty(exports, "__esModule", { value: true })` but has no
 `exports.default`. It is a transitive dependency of `@aws-crypto/*` (used by
-`@aws-sdk/client-s3`).
+`@aws-sdk/client-s3`). ([tslib source](https://github.com/microsoft/tslib/blob/main/tslib.js#L62-L65))
 
 ### Root cause
 
-Rolldown's `__toESM` helper has this logic:
+Rolldown's `__toESM` helper has this logic
+([runtime helper behavior](https://github.com/rolldown/rolldown/issues/5934), [helper source](https://github.com/rolldown/rolldown/blob/main/crates/rolldown/src/runtime/runtime-base.js#L49-L57)):
 
 ```javascript
 var __toESM = (mod, isNodeMode, target) => (
@@ -78,7 +79,8 @@ creates a synthetic `.default` property pointing to the original module. But whe
 `isNodeMode` is **falsy** and `__esModule` is `true`, it assumes the module
 already provides its own `.default` — which `tslib` does not.
 
-Rolldown sets `isNodeMode = 1` when `platform: "node"` is configured. **Nitro's
+Rolldown sets `isNodeMode = 1` when `platform: "node"` is configured
+([platform option](https://github.com/rolldown/rolldown/pull/751), [input options](https://rolldown.rs/reference/inputoptions.platform)). **Nitro's
 server build never sets `platform: "node"` in its Rolldown config**, so
 `isNodeMode` is always `undefined`. This causes `__toESM` to skip the synthetic
 `.default` for `tslib`, but the generated code expects it:
@@ -91,18 +93,20 @@ var { __extends, __assign, ... } = (/* @__PURE__ */ __toESM(require_tslib())).de
 
 ### Where the bug is
 
-In Nitro's `vite.mjs` → `getBundlerConfig()`, the `rolldownConfig` object never
+In Nitro's Vite plugin, [`getBundlerConfig()`](https://github.com/nitrojs/nitro/blob/main/src/build/vite/bundler.ts) builds the `rolldownConfig` object but never
 includes `platform: "node"`. Since the server build targets Node.js/Bun (not the
 browser), it should set `platform: "node"`.
 
-The relevant code path is approximately:
+The relevant code path is in [**`src/build/vite/bundler.ts`**](https://github.com/nitrojs/nitro/blob/main/src/build/vite/bundler.ts#L46-L65) (emitted as `dist/vite.mjs`):
 
 ```javascript
-// nitro/dist/vite.mjs — getBundlerConfig()
-const rolldownConfig = defu({
-  transform: { inject: base.env.inject },
-  output: { ... }
-}, nitro.options.rolldownConfig, nitro.options.rollupConfig, commonConfig);
+// getBundlerConfig() — rolldown branch (lines ~47–65)
+const rolldownConfig: RolldownConfig = defu(
+  { transform: { inject: ... }, output: { codeSplitting: ... } },
+  nitro.options.rolldownConfig,
+  nitro.options.rollupConfig,
+  commonConfig
+);
 // ↑ No `platform: "node"` anywhere in this chain
 ```
 
